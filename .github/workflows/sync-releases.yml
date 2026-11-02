@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 120
     env:
       # 改成上游原作者仓库，格式为：用户名/仓库名
-      UPSTREAM_REPO: https://github.com/YuJunZhiXue/dsh-purge
+      UPSTREAM_REPO: YuJunZhiXue/dsh-purge
       TARGET_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
 
