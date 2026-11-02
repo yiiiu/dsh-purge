@@ -1,0 +1,33 @@
+name: Sync Upstream Code
+
+on:
+  # Every six hours (UTC). Avoid minute 00 to reduce scheduled-job delays.
+  schedule:
+    - cron: '23 */6 * * *'
+  # Run manually from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-code
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream into master
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sync fork with upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Syncing parent repository into this fork: master'
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/merge-upstream" \
+            -f branch=master \
+            --jq '"Result: \(.merge_type) — \(.message)"'
