@@ -1,0 +1,85 @@
+name: Sync Upstream Releases
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'  # UTC，每 6 小时执行一次
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-releases
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # 改成上游原作者仓库，格式为：用户名/仓库名
+      UPSTREAM_REPO: original-owner/original-repo
+      TARGET_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync upstream release tags and assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+
+          # 首次运行同步最近 100 个 Releases，后续同步新发布的版本。
+          gh release list -R "$UPSTREAM_REPO" -L 100 --exclude-drafts \
+            --order desc --json tagName \
+            | jq -r 'reverse | .[].tagName' \
+            | while IFS= read -r tag; do
+                echo "正在检查 Release：$tag"
+
+                if gh release view "$tag" -R "$TARGET_REPO" \
+                    --json tagName >/dev/null 2>&1; then
+                  echo "已存在，跳过：$tag"
+                  continue
+                fi
+
+                # Release 必须关联正确的上游 Git Tag，不能让 GitHub 自动创建错误 Tag。
+                if ! git ls-remote --exit-code --tags origin \
+                    "refs/tags/$tag" >/dev/null 2>&1; then
+                  git fetch --no-tags upstream \
+                    "refs/tags/$tag:refs/tags/$tag"
+                  git push origin "refs/tags/$tag:refs/tags/$tag"
+                fi
+
+                workdir="$(mktemp -d)"
+                mkdir -p "$workdir/assets"
+                gh release view "$tag" -R "$UPSTREAM_REPO" \
+                  --json name,body,isPrerelease,assets > "$workdir/release.json"
+
+                jq -r '.body // ""' "$workdir/release.json" > "$workdir/notes.md"
+                title="$(jq -r '.name // ""' "$workdir/release.json")"
+                [[ -n "$title" ]] || title="$tag"
+
+                args=(release create "$tag" -R "$TARGET_REPO"
+                  --verify-tag --title "$title" --notes-file "$workdir/notes.md")
+                if [[ "$(jq -r '.isPrerelease' "$workdir/release.json")" == 'true' ]]; then
+                  args+=(--prerelease)
+                fi
+
+                if [[ "$(jq '.assets | length' "$workdir/release.json")" -gt 0 ]]; then
+                  gh release download "$tag" -R "$UPSTREAM_REPO" \
+                    --dir "$workdir/assets"
+                  mapfile -d '' -t files < <(
+                    find "$workdir/assets" -maxdepth 1 -type f -print0
+                  )
+                  args+=("${files[@]}")
+                fi
+
+                gh "${args[@]}"
+                rm -rf "$workdir"
+                echo "同步成功：$tag"
+              done
